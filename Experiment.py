@@ -275,57 +275,24 @@ class Experiment:
                     f"                {predicted_test_label_counts[7]}                |"
                     f"                     {predicted_test_label_counts[8]}"
                 )
+                # per-class TPR / FPR (guard against divide-by-zero)
+                c = predicted_test_label_counts
+
+                def sd(num, den):
+                    return num / den if den else 0.0
+
+                self.tpr_a = sd(c[0], c[0] + c[1] + c[2])
+                self.fpr_a = sd(c[3] + c[6], c[3] + c[4] + c[5] + c[6] + c[7] + c[8])
+                self.tpr_g = sd(c[4], c[3] + c[4] + c[5])
+                self.fpr_g = sd(c[1] + c[7], c[0] + c[1] + c[2] + c[6] + c[7] + c[8])
+                self.tpr_c = sd(c[8], c[6] + c[7] + c[8])
+                self.fpr_c = sd(c[2] + c[5], c[0] + c[1] + c[2] + c[3] + c[4] + c[5])
             # if it is the kd Tree Classifier, it is not builted yet
             else:
                 raise ValueError(
                     "kdTreeKNNClassifier is not builted yet."
                 )  # step:n   space:0
 
-        self.tpr_a = predicted_test_label_counts[0] / (  # step:7   space:1
-            predicted_test_label_counts[0]
-            + predicted_test_label_counts[1]
-            + predicted_test_label_counts[2]
-        )
-        self.fpr_a = (  # step：11   space:1
-            predicted_test_label_counts[3] + predicted_test_label_counts[6]
-        ) / (
-            predicted_test_label_counts[3]
-            + predicted_test_label_counts[4]
-            + predicted_test_label_counts[5]
-            + predicted_test_label_counts[6]
-            + predicted_test_label_counts[7]
-            + predicted_test_label_counts[8]
-        )
-        self.tpr_g = predicted_test_label_counts[4] / (  # step:7   space:1
-            predicted_test_label_counts[3]
-            + predicted_test_label_counts[4]
-            + predicted_test_label_counts[5]
-        )
-        self.fpr_g = (  # step:11   space:1
-            predicted_test_label_counts[1] + predicted_test_label_counts[7]
-        ) / (
-            predicted_test_label_counts[0]
-            + predicted_test_label_counts[1]
-            + predicted_test_label_counts[2]
-            + predicted_test_label_counts[6]
-            + predicted_test_label_counts[7]
-            + predicted_test_label_counts[8]
-        )
-        self.tpr_c = predicted_test_label_counts[8] / (  # step:7   space:1
-            predicted_test_label_counts[6]
-            + predicted_test_label_counts[7]
-            + predicted_test_label_counts[8]
-        )
-        self.fpr_c = (  # step:11   space:1
-            predicted_test_label_counts[2] + predicted_test_label_counts[5]
-        ) / (
-            predicted_test_label_counts[0]
-            + predicted_test_label_counts[1]
-            + predicted_test_label_counts[2]
-            + predicted_test_label_counts[3]
-            + predicted_test_label_counts[4]
-            + predicted_test_label_counts[5]
-        )
 
     def ROC(self, tpr, fpr):
         """Plot the ROC graph based on true positive rate and false positive rate

@@ -138,11 +138,12 @@ class simplekNNClassifier(ClassifierAlgorithm):
                 total_distance = math.sqrt(total_distance)  # step:n^2   space:1
                 ED.append(total_distance)  # step:n^2   space:0
             # get the mode of the closest k labels
-            for l in range(k):  # step:n^2   space:n
-                labels.append(
-                    self.true_label.iloc[ED.index(min(ED))]
-                )  # step:4n^2   space:0
-                ED.pop(ED.index(min(ED)))  # step:2n^2   space:-1
+            for l in range(min(k, len(ED))):  # step:n^2   space:n
+                mi = ED.index(min(ED))  # step:n^2   space:1
+                labels.append(self.true_label.iloc[mi])  # step:4n^2   space:0
+                # mark the used distance instead of popping, so the index
+                # stays aligned with the original true_label positions
+                ED[mi] = float("inf")  # step:n^2   space:0
             # save all the test data labels
             predicted_test_label.append(mode(labels))  # step:n   space:n
         return predicted_test_label  # step:1   space:0
@@ -231,60 +232,40 @@ class kdTreeKNNClassifier(ClassifierAlgorithm):
             self.trainingData, self.train_true_label, 0
         )  # step:O(n^2)   space:O(nlogn)  by build_tree function
 
-    def closest(self, value, tree1, tree2):
-        """Check which children has smaller distance
+    def k_nearest(self, point, k):
+        """Find the k nearest neighbours of point in the kd-tree and
+        return their labels. Walks the tree, keeping the k smallest
+        distances and pruning a branch only when it cannot hold a closer
+        point than the current k-th nearest.
 
-        value: float
-        tree1: tree
-        tree2: tree
-        return: tree, float
-        T(n) = 6
-        T(n) = O(c) -> constant
-        S(n) = 5
-        S(n) = O(c) -> constant
+        point: numpy array
+        k: int
+        return: List[label]
         """
-        dist_to_rt1 = np.linalg.norm(value - tree1.value)  # step:1   space:1
-        dist_to_rt2 = np.linalg.norm(value - tree2.value)  # step:1   space:1
-        if dist_to_rt1 < dist_to_rt2:  # step:3   space:1
-            return tree1, dist_to_rt1  # step:2   space:0
-        else:
-            return tree2, dist_to_rt2  # step:2   space:2
+        neighbors = []
 
-    def nearest_neighbor(self, tree, lst):
-        """check the nearest neightbor of the tree
-
-        tree: tree
-        lst: list
-        return: tree
-        T(n) = 28 + 2*O(c)
-        T(n) = O(c)
-        S(n) = 4 + 2*O(c)
-        S(n) = O(c)
-        """
-        if tree is None:  # step:2   space:1
-            return None  # step:2   space:0
-        if lst[tree.axis] < tree.value[tree.axis]:  # step:3   space:1
-            next_branch = tree.leftChild  # step:1   space:1
-            other_branch = tree.rightChild  # step:1   space:1
-        else:
-            next_branch = tree.rightChild  # step:1   space:0
-            other_branch = tree.leftChild  # step:1   space:0
-        temp = self.nearest_neighbor(next_branch, lst)  # step:T(c)   space:S(c)
-        if temp is not None:  # step:2   space:1
-            best, dist = self.closest(lst, tree, temp)  # step:T(c)   space:S(c)
-        else:
-            best = tree  # step:1   space:0
-            dist = np.linalg.norm(lst - tree.value)  # step:2   space:0
-        dist_prime = abs(lst[tree.axis] - tree.value[tree.axis])  # step:4   space:1
-        if dist_prime < dist:  # step:3   space:1
-            temp = self.nearest_neighbor(other_branch, lst)  # step:T(c)   space:S(c)
-            if temp is not None:  # step:2   space:1
-                best, temp_dist = self.closest(
-                    lst, best, temp
-                )  # step:T(c)   space:S(c)
+        def search(node):
+            if node is None:
+                return
+            dist = np.linalg.norm(point - node.value)
+            if len(neighbors) < k:
+                neighbors.append([dist, node.label])
+                neighbors.sort(key=lambda x: x[0])
+            elif dist < neighbors[-1][0]:
+                neighbors[-1] = [dist, node.label]
+                neighbors.sort(key=lambda x: x[0])
+            diff = point[node.axis] - node.value[node.axis]
+            if diff < 0:
+                near, far = node.leftChild, node.rightChild
             else:
-                best = tree  # step:2   space:0
-        return best  # step:2   space:0
+                near, far = node.rightChild, node.leftChild
+            search(near)
+            if len(neighbors) < k or abs(diff) < neighbors[-1][0]:
+                search(far)
+
+        search(self.kdtree)
+        return [label for _, label in neighbors]
+
 
     def test(self, testData, k=5):
         """This is a test function for kd Tree KNN.
@@ -310,8 +291,6 @@ class kdTreeKNNClassifier(ClassifierAlgorithm):
         test_result = [None] * test_shape[0]  # step:n   space:n
         for i in range(test_shape[0]):  # step:n   space:n
             test_vec = self.testData.iloc[i, :].to_numpy()  # step:n^2   space:n
-            neighbor = self.nearest_neighbor(
-                self.kdtree, test_vec
-            )  # step:n^2   space:n
-            test_result[i] = neighbor.label  # step:n^2   space:n
+            labels = self.k_nearest(test_vec, self.k)  # step:n^2   space:n
+            test_result[i] = mode(labels)  # step:n^2   space:n
         return test_result  # step:2   space:0

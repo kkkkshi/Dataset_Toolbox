@@ -18,7 +18,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from nltk import RegexpTokenizer, FreqDist
 from nltk.corpus import stopwords
-from wordcloud import wordcloud, WordCloud
+from wordcloud import WordCloud
 import copy
 
 time_series_data = "TimeSeriesData/ptbdb_normal.csv"
@@ -115,7 +115,7 @@ class TimeSeriesDataSet(DataSet):
 
         return: None
         """
-        self.data = self.medium_filter()
+        self.data = self.medium_filter(window_size)
         print(self.data)
         print("In TimeSeries Dataset, the clean is rebuild.")
 
@@ -162,7 +162,7 @@ class TimeSeriesDataSet(DataSet):
         """
         col_number = self.data.shape[1]
         row_number = self.data.shape[0]
-        new_data = self.data
+        new_data = self.data.copy()
         if filter_size == 1:
             return self.data
         elif filter_size % 2 != 1:
@@ -214,7 +214,7 @@ class TextDataSet(DataSet):
             for j in range(col_number):
                 clean_words = tokenizer.tokenize(self.data.iloc[i, j])
                 clean_words = [i for i in clean_words if i not in stop_words]
-                clean_words = [i for i in clean_words if len(i) > 3 & len(i) < 11]
+                clean_words = [i for i in clean_words if 3 < len(i) < 11]
                 self.data.iloc[i, j] = " ".join(clean_words)
         print(self.data)
         print("In Text Dataset, the clean is rebuild.")
@@ -291,7 +291,7 @@ class QuantDataSet(DataSet):
         col_number = self.data.shape[1]
         for i in range(1, col_number):
             mean_column = self.self_mean(list(self.data.iloc[:, i]))
-            self.data.iloc[:, i].fillna(mean_column, inplace=True)
+            self.data.iloc[:, i] = self.data.iloc[:, i].fillna(mean_column)
         print(self.data)
         return self.data
 
@@ -302,9 +302,13 @@ class QuantDataSet(DataSet):
         return: mean of the list
         """
         total = 0
+        count = 0
         for i in range(len(nums)):
+            if pd.isna(nums[i]):
+                continue
             total += nums[i]
-        mean = total / len(nums)
+            count += 1
+        mean = total / count if count else float("nan")
         return mean
 
     def explore(self):
@@ -363,19 +367,15 @@ class QualDataSet(DataSet):
             for i in range(col_number):
                 tmp = [x for x in (list(self.data.iloc[:, i])) if pd.isnull(x) == False]
                 test = self.mode(tmp)
-                self.data.iloc[:, i].fillna(test, inplace=True)
+                self.data.iloc[:, i] = self.data.iloc[:, i].fillna(test)
             return self.data
         else:
             for i in range(col_number):
+                extracted = self.data.iloc[:, i].astype(str).str.extractall(r"(\d+)")
                 column_median = (
-                    self.data.iloc[:, i]
-                    .astype(str)
-                    .str.extractall("(\d+)")
-                    .fillna("")
-                    .astype(int)
-                    .median()
+                    extracted.astype(int).median().iloc[0] if not extracted.empty else 0
                 )
-                self.data.iloc[:, i].fillna(column_median, inplace=True)
+                self.data.iloc[:, i] = self.data.iloc[:, i].fillna(column_median)
             print(self.data)
             return self.data
 
@@ -437,7 +437,7 @@ class TransactionDataSet(DataSet):
         # the support will be very low
         self.data = pd.read_csv(filename, nrows=100)
 
-    def transaction_matrix(self):
+    def build_transaction_matrix(self):
         """Transfer the original csv into a countvectorizer dataframe by own written code.
         Each column is a product, if 1 appears, the customer get the item, 0 for otherwise
 
@@ -457,9 +457,9 @@ class TransactionDataSet(DataSet):
         )
         for index, row in self.data.iterrows():
             for item in row:
-                if item == np.nan:
+                if pd.isna(item):
                     continue
-                self.transaction_matrix.loc[index][item] = 1
+                self.transaction_matrix.loc[index, item] = 1
 
     def item_lists(self, prev_item_set):
         """The apriori method is implemented, prev_item_set is the previous item set, if previous set has
@@ -498,11 +498,10 @@ class TransactionDataSet(DataSet):
                         continue
                     new_item_set.append([i, j])  # step:n*n   space:0
             else:
+                # keep only transactions containing every item already in i
+                rows = self.transaction_matrix
                 for k in i:  # step:n   space:n
-                    # check each item in the matrix to be 1 and built the new item set
-                    rows = self.transaction_matrix[
-                        self.transaction_matrix[k] == 1
-                    ]  # step:n*(n^2)   space:n^2
+                    rows = rows[rows[k] == 1]  # step:n*(n^2)   space:n^2
                 rows = (
                     rows.sum().sort_values(ascending=False).reset_index()
                 )  # step:n^2logn   space:0
@@ -576,9 +575,26 @@ class TransactionDataSet(DataSet):
         S(n) = O(n^2)
         """
         # form the transaction matrix
-        self.transaction_matrix()
+        self.build_transaction_matrix()
         # built the itemset
         self.itemset()
+
+    def _count(self, *groups):
+        """Count transactions that contain every item across all given group(s).
+        Each group may be a single item (str) or a list of items.
+
+        return: int
+        """
+        items = []
+        for g in groups:
+            if isinstance(g, str):
+                items.append(g)
+            else:
+                items.extend(g)
+        mask = pd.Series(True, index=self.transaction_matrix.index)
+        for it in items:
+            mask &= self.transaction_matrix[it] == 1
+        return int(mask.sum())
 
     def support(self, left, right):
         """Support: Transaction contain both X and Y / Total number of transaction
@@ -588,22 +604,9 @@ class TransactionDataSet(DataSet):
         right: string/List
         return: float
         """
-        # left and right can be a string or a list
-        if isinstance(left, str):
-            numerator = self.transaction_matrix[self.transaction_matrix[left] == 1]
-        else:
-            for i in left:
-                numerator = self.transaction_matrix[self.transaction_matrix[i] == 1]
-        if isinstance(right, str):
-            numerator = self.transaction_matrix[self.transaction_matrix[right] == 1]
-        else:
-            for j in right:
-                numerator = self.transaction_matrix[self.transaction_matrix[j] == 1]
-        # calculate the support based on counts
         denominator = self.transaction_matrix.shape[0]
-        numerator = numerator.shape[0]
-        supp = numerator / denominator
-        return supp
+        numerator = self._count(left, right)
+        return numerator / denominator
 
     def confidence(self, left, right):
         """Confidence: Transaction contain both X and Y / Transaction contain X
@@ -613,22 +616,10 @@ class TransactionDataSet(DataSet):
         right: string/List
         return: float
         """
-        # left and right can be a string or a list
-        if isinstance(left, str):
-            numerator = self.transaction_matrix[self.transaction_matrix[left] == 1]
-        else:
-            for i in left:
-                numerator = self.transaction_matrix[self.transaction_matrix[i] == 1]
-        denominator = numerator.shape[0]
-        if isinstance(right, str):
-            numerator = self.transaction_matrix[self.transaction_matrix[right] == 1]
-        else:
-            for j in right:
-                numerator = self.transaction_matrix[self.transaction_matrix[j] == 1]
-        # calculate the confidence based on formula
-        numerator = numerator.shape[0]
-        conf = numerator / denominator
-        return conf
+        left_count = self._count(left)
+        if left_count == 0:
+            return 0.0
+        return self._count(left, right) / left_count
 
     def lift(self, left, right):
         """Lift: Transaction contains both X and Y / ((Transaction contains X) * (Transaction contains Y))
@@ -638,34 +629,13 @@ class TransactionDataSet(DataSet):
         right: string/List
         return: float
         """
-        # left and right can be string or list
-        if isinstance(left, str):
-            numerator = self.transaction_matrix[self.transaction_matrix[left] == 1]
-        else:
-            for i in left:
-                numerator = self.transaction_matrix[self.transaction_matrix[i] == 1]
-        if isinstance(right, str):
-            numerator = self.transaction_matrix[self.transaction_matrix[right] == 1]
-        else:
-            for j in right:
-                numerator = self.transaction_matrix[self.transaction_matrix[j] == 1]
-        numerator = numerator.shape[0]
-
-        if isinstance(left, str):
-            denominator_x = self.transaction_matrix[self.transaction_matrix[left] == 1]
-        else:
-            for i in left:
-                denominator_x = self.transaction_matrix[self.transaction_matrix[i] == 1]
-        denominator_x = denominator_x.shape[0]
-        if isinstance(right, str):
-            denominator_y = self.transaction_matrix[self.transaction_matrix[right] == 1]
-        else:
-            for j in right:
-                denominator_y = self.transaction_matrix[self.transaction_matrix[j] == 1]
-        # calculate the lift based on formula
-        denominator_y = denominator_y.shape[0]
-        lift = numerator / (denominator_x * denominator_y)
-        return lift
+        total = self.transaction_matrix.shape[0]
+        both = self._count(left, right)
+        left_count = self._count(left)
+        right_count = self._count(right)
+        if left_count == 0 or right_count == 0:
+            return 0.0
+        return (both * total) / (left_count * right_count)
 
     def explore(self, supportThreshold=0.25):
         """given the supportThreshold, to make the transaction items' support, confidence and lift
@@ -704,12 +674,9 @@ class TransactionDataSet(DataSet):
                             )
                         )
         # sort the rules based on support value
-        for i in range(1, len(rules)):
-            for j in range(i - 1):
-                if rules[j].support < rules[i].support:
-                    rules[j], rules[i] = rules[i], rules[j]
+        rules.sort(key=lambda r: r.support, reverse=True)
         # check if the support is larger than the supportThreshold, then print out
-        for k in range(10):
+        for k in range(min(10, len(rules))):
             if rules[k].support >= supportThreshold:
                 print(rules[k])
 
@@ -778,8 +745,7 @@ class HeterogenousDataSet(DataSet):
         self.dataset[1].clean()
 
     def explore(self):
-        """Call each dataset's explore function
-        """
+        """Call each dataset's explore function"""
         self.dataset[0].explore()
         self.dataset[1].explore()
 
@@ -789,8 +755,8 @@ class HeterogenousDataSet(DataSet):
         index: Int
         return: DataFrame
         """
-        if index >= 0 and index <= len(self.dataset):
+        if 0 <= index < len(self.dataset):
             self.selected = self.dataset[index]
         else:
-            ValueError("Index out of range")
+            raise ValueError("Index out of range")
         return self.selected
